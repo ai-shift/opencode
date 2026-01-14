@@ -19,21 +19,33 @@ var configFS embed.FS
 
 func main() {
 	query := flag.String("query", "", "Message to send to opencode")
+	dir := flag.String("dir", "", "Directory for opencode to operate in (defaults to current directory)")
 	flag.Parse()
 
 	if *query == "" {
-		fmt.Println("Usage: example -query \"your message\"")
+		fmt.Println("Usage: example -query \"your message\" [-dir /path/to/session/dir]")
 		flag.Usage()
 		os.Exit(1)
 	}
 
-	tmpDir, err := os.MkdirTemp("", "opencode-*")
+	// Get current working directory as default
+	cwd, err := os.Getwd()
 	if err != nil {
-		log.Fatalf("Failed to create temp dir: %v", err)
+		log.Fatalf("Failed to get current directory: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
 
-	// Copy embedded config files to temp directory
+	// Determine session directory (defaults to current directory)
+	sessionDir := *dir
+	if sessionDir == "" {
+		sessionDir = cwd
+	}
+
+	// Ensure session directory exists
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		log.Fatalf("Failed to create directory %s: %v", sessionDir, err)
+	}
+
+	// Copy embedded config files to directory (always update from embedded FS)
 	if err := fs.WalkDir(configFS, "example_config", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -49,7 +61,7 @@ func main() {
 
 		// Get the relative path without the "example_config/" prefix
 		relPath := filepath.Base(path)
-		destPath := filepath.Join(tmpDir, relPath)
+		destPath := filepath.Join(sessionDir, relPath)
 
 		return os.WriteFile(destPath, data, 0644)
 	}); err != nil {
@@ -57,13 +69,13 @@ func main() {
 	}
 
 	cfg := opencode.Config{
-		ConfigDir: tmpDir,
+		ConfigDir: sessionDir,
 		APIKey:    os.Getenv("OPENCODE_API_KEY"),
 	}
 
 	oc := opencode.New(cfg)
 
-	fmt.Printf("Starting opencode with config: %s\n", tmpDir)
+	fmt.Printf("Starting opencode in directory: %s\n", sessionDir)
 
 	if err := oc.Start(); err != nil {
 		log.Fatalf("Failed to start opencode: %v", err)
