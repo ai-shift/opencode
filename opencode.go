@@ -51,10 +51,6 @@ type Message struct {
 	Parts     []MessagePart `json:"parts"`
 }
 
-type Event struct {
-	Type       string
-	Properties map[string]interface{}
-}
 
 func New(cfg Config) *OpenCode {
 	return &OpenCode{
@@ -389,21 +385,14 @@ func (oc *OpenCode) StreamEvents(callback func(Event)) error {
 		if strings.HasPrefix(line, "data: ") {
 			data := strings.TrimPrefix(line, "data: ")
 
-			var event struct {
-				Type       string                 `json:"type"`
-				Properties map[string]interface{} `json:"properties,omitempty"`
-			}
-
-			if err := json.Unmarshal([]byte(data), &event); err != nil {
+			event, err := ParseEvent([]byte(data))
+			if err != nil {
 				slog.Error("Error decoding event", "err", err, "data", data)
 				continue
 			}
 
-			slog.Debug("Received event", "type", event.Type)
-			callback(Event{
-				Type:       event.Type,
-				Properties: event.Properties,
-			})
+			slog.Debug("Received event", "type", event.EventType())
+			callback(event)
 		}
 	}
 
