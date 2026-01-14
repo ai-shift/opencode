@@ -12,6 +12,11 @@ fmt:
 	go fmt ./...
 
 QUERY ?= what is 2+2
+DIR ?=
 
 example:
-	go run cmd/example/main.go -query "$(QUERY)"
+	@if [ -n "$(DIR)" ]; then \
+		go run cmd/example/main.go -query "$(QUERY)" -dir "$(DIR)"; \
+	else \
+		go run cmd/example/main.go -query "$(QUERY)"; \
+	fi
