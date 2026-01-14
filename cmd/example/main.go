@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/ai-shift/opencode/pkg/opencode"
+	"github.com/ai-shift/opencode"
 )
 
 //go:embed example_config
@@ -128,33 +128,28 @@ func main() {
 	for {
 		select {
 		case event := <-eventChan:
-			if event.Type == "message.updated" {
-				if info, ok := event.Properties["info"].(map[string]interface{}); ok {
-					if role, ok := info["role"].(string); ok && role == "assistant" {
-						if msgID, ok := info["id"].(string); ok {
-							assistantMessageID = msgID
-						}
-					}
-					if finish, ok := info["finish"].(string); ok && finish == "stop" {
+			switch evt := event.(type) {
+			case *opencode.MessageUpdatedEvent:
+				if evt.Properties.Info.Role == "assistant" {
+					assistantMessageID = evt.Properties.Info.ID
+
+					// Check if message is finished
+					if evt.Properties.Info.Finish != nil && *evt.Properties.Info.Finish == "stop" {
 						if receivedText {
 							fmt.Println()
 							os.Exit(0)
 						}
 					}
 				}
-			} else if event.Type == "message.part.updated" {
-				if part, ok := event.Properties["part"].(map[string]interface{}); ok {
-					if msgID, ok := part["messageID"].(string); ok && msgID == assistantMessageID {
-						if partType, ok := part["type"].(string); ok && partType == "text" {
-							if text, ok := part["text"].(string); ok && text != "" {
-								if !receivedText {
-									fmt.Print("Assistant: ")
-									receivedText = true
-								}
-								fmt.Print(text)
-							}
-						}
+
+			case *opencode.MessagePartUpdatedEvent:
+				part := evt.Properties.Part
+				if part.MessageID == assistantMessageID && part.Type == "text" && part.Text != "" {
+					if !receivedText {
+						fmt.Print("Assistant: ")
+						receivedText = true
 					}
+					fmt.Print(part.Text)
 				}
 			}
 		case err := <-errorChan:
