@@ -97,8 +97,11 @@ func (oc *OpenCode) Start() error {
 	}
 
 	if configDir != "" {
+		// Set HOME and XDG_CONFIG_HOME to isolate config completely
+		cmd.Env = append(cmd.Env, fmt.Sprintf("HOME=%s", configDir))
+		cmd.Env = append(cmd.Env, fmt.Sprintf("XDG_CONFIG_HOME=%s", configDir))
 		cmd.Env = append(cmd.Env, fmt.Sprintf("OPENCODE_CONFIG_DIR=%s", configDir))
-		slog.Info("Using custom config directory", "dir", configDir)
+		slog.Info("Using isolated config directory", "dir", configDir)
 	} else {
 		slog.Info("Using system config directory")
 	}
@@ -374,6 +377,11 @@ func (oc *OpenCode) StreamEvents(callback func(Event)) error {
 
 	// Parse Server-Sent Events (SSE) format
 	scanner := bufio.NewScanner(resp.Body)
+	// Increase buffer size to handle large events (e.g. file listings)
+	const maxScanTokenSize = 1024 * 1024 // 1MB
+	buf := make([]byte, maxScanTokenSize)
+	scanner.Buffer(buf, maxScanTokenSize)
+
 	for scanner.Scan() {
 		line := scanner.Text()
 
