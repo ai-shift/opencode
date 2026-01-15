@@ -1,5 +1,6 @@
 .PHONY: test vet fmt example
 -include .env
+export
 
 test: vet
 	go test ./... $(ARGS)
