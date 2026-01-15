@@ -18,15 +18,8 @@ import (
 var configFS embed.FS
 
 func main() {
-	query := flag.String("query", "", "Message to send to opencode")
 	dir := flag.String("dir", "", "Directory for opencode to operate in (defaults to current directory)")
 	flag.Parse()
-
-	if *query == "" {
-		fmt.Println("Usage: example -query \"your message\" [-dir /path/to/session/dir]")
-		flag.Usage()
-		os.Exit(1)
-	}
 
 	// Get current working directory as default
 	cwd, err := os.Getwd()
@@ -75,7 +68,7 @@ func main() {
 
 	oc := opencode.New(cfg)
 
-	fmt.Printf("Starting opencode in directory: %s\n", sessionDir)
+	fmt.Printf("Starting OpenCode server in directory: %s\n", sessionDir)
 
 	if err := oc.Start(); err != nil {
 		log.Fatalf("Failed to start opencode: %v", err)
@@ -85,81 +78,14 @@ func main() {
 	if err := oc.WaitForReady(240); err != nil {
 		log.Fatalf("Failed to connect to opencode: %v", err)
 	}
-	fmt.Println("Connected!")
 
-	sessions, err := oc.ListSessions()
-	if err != nil {
-		log.Fatalf("Failed to list sessions: %v", err)
-	}
+	fmt.Printf("OpenCode server is ready at: http://%s\n", oc.Addr())
+	fmt.Println("Press Ctrl+C to stop the server")
 
-	var sessionID string
-	if len(sessions) > 0 {
-		sessionID = sessions[0].ID
-		fmt.Printf("Using existing session: %s (%s)\n", sessions[0].ID, sessions[0].Title)
-	} else {
-		session, err := oc.CreateSession("Example Session")
-		if err != nil {
-			log.Fatalf("Failed to create session: %v", err)
-		}
-		sessionID = session.ID
-		fmt.Printf("Created new session: %s\n", sessionID)
-	}
-
+	// Wait for interrupt signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
 
-	eventChan := make(chan opencode.Event, 1000)
-	errorChan := make(chan error, 1)
-
-	go func() {
-		errorChan <- oc.StreamEvents(func(event opencode.Event) {
-			eventChan <- event
-		})
-	}()
-
-	fmt.Printf("Sending message: %s\n", *query)
-	if _, err := oc.SendMessage(sessionID, *query); err != nil {
-		log.Fatalf("Failed to send message: %v", err)
-	}
-
-	receivedText := false
-	var assistantMessageID string
-
-	for {
-		select {
-		case event := <-eventChan:
-			switch evt := event.(type) {
-			case *opencode.MessageUpdatedEvent:
-				if evt.Properties.Info.Role == "assistant" {
-					assistantMessageID = evt.Properties.Info.ID
-
-					// Check if message is finished
-					if evt.Properties.Info.Finish != nil && *evt.Properties.Info.Finish == "stop" {
-						if receivedText {
-							fmt.Println()
-							os.Exit(0)
-						}
-					}
-				}
-
-			case *opencode.MessagePartUpdatedEvent:
-				part := evt.Properties.Part
-				if part.MessageID == assistantMessageID && part.Type == "text" && part.Text != "" {
-					if !receivedText {
-						fmt.Print("Assistant: ")
-						receivedText = true
-					}
-					fmt.Print(part.Text)
-				}
-			}
-		case err := <-errorChan:
-			if err != nil {
-				log.Printf("Stream error: %v", err)
-			}
-			return
-		case <-sigChan:
-			fmt.Println("\nInterrupted by user")
-			return
-		}
-	}
+	fmt.Println("\nStopping OpenCode server...")
 }
