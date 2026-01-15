@@ -2,11 +2,13 @@ package opencode
 
 import (
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -16,6 +18,7 @@ type Config struct {
 	ConfigDir string
 	Addr      string
 	APIKey    string
+	ConfigFS  fs.FS
 }
 
 type OpenCode struct {
@@ -66,6 +69,36 @@ func (oc *OpenCode) Start() error {
 	}
 
 	if configDir != "" {
+		if oc.config.ConfigFS != nil {
+			// Copy config files from ConfigFS to configDir
+			if err := fs.WalkDir(oc.config.ConfigFS, ".", func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if d.IsDir() {
+					return nil
+				}
+
+				data, err := fs.ReadFile(oc.config.ConfigFS, path)
+				if err != nil {
+					return err
+				}
+
+				destPath = filepath.Join(configDir, path)
+
+				if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+					return err
+				}
+				return os.WriteFile(destPath, data, 0644)
+			}); err != nil {
+				return fmt.Errorf("failed to copy config files: %w", err)
+			}
+			slog.Info("Copied config files to directory", "dir", configDir)
+		}
+
+		// Set the working directory for the opencode process
+		cmd.Dir = configDir
+
 		// Set HOME and XDG_CONFIG_HOME to isolate config completely
 		cmd.Env = append(cmd.Env, fmt.Sprintf("HOME=%s", configDir))
 		cmd.Env = append(cmd.Env, fmt.Sprintf("XDG_CONFIG_HOME=%s", configDir))

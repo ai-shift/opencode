@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"github.com/ai-shift/opencode"
@@ -38,32 +37,16 @@ func main() {
 		log.Fatalf("Failed to create directory %s: %v", sessionDir, err)
 	}
 
-	// Copy embedded config files to directory (always update from embedded FS)
-	if err := fs.WalkDir(configFS, "example_config", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-
-		data, err := configFS.ReadFile(path)
-		if err != nil {
-			return err
-		}
-
-		// Get the relative path without the "example_config/" prefix
-		relPath := filepath.Base(path)
-		destPath := filepath.Join(sessionDir, relPath)
-
-		return os.WriteFile(destPath, data, 0644)
-	}); err != nil {
-		log.Fatalf("Failed to copy config files: %v", err)
+	// Create sub FS for config files
+	subFS, err := fs.Sub(configFS, "example_config")
+	if err != nil {
+		log.Fatalf("Failed to create sub FS: %v", err)
 	}
 
 	cfg := opencode.Config{
 		ConfigDir: sessionDir,
 		APIKey:    os.Getenv("OPENCODE_API_KEY"),
+		ConfigFS:  subFS,
 	}
 
 	oc := opencode.New(cfg)
