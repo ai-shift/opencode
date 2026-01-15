@@ -1,6 +1,9 @@
 package opencode
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -10,22 +13,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 )
 
 type Config struct {
-	ConfigDir string
-	Addr      string
-	APIKey    string
-	ConfigFS  fs.FS
+	Addr     string
+	ConfigFS fs.FS
+	CWD      string
 }
 
 type OpenCode struct {
-	config Config
-	cmd    *exec.Cmd
-	client *http.Client
-	mu     sync.Mutex
+	config    Config
+	cmd       *exec.Cmd
+	client    *http.Client
+	configDir string
+	mu        sync.Mutex
 }
 
 func New(cfg Config) *OpenCode {
@@ -53,100 +55,80 @@ func (oc *OpenCode) Start() error {
 	oc.config.Addr = fmt.Sprintf("127.0.0.1:%d", port)
 	slog.Info("Allocated random port", "port", port)
 
+	if oc.config.ConfigFS != nil {
+		hashBytes := make([]byte, 8)
+		if _, err := rand.Read(hashBytes); err != nil {
+			return fmt.Errorf("failed to generate random hash: %w", err)
+		}
+		hash := hex.EncodeToString(hashBytes)
+		oc.configDir = filepath.Join("/tmp", fmt.Sprintf("opencode_%s", hash))
+
+		if err := os.MkdirAll(oc.configDir, 0755); err != nil {
+			return fmt.Errorf("failed to create config directory: %w", err)
+		}
+		slog.Info("Created config directory", "path", oc.configDir)
+
+		if err := fs.WalkDir(oc.config.ConfigFS, ".", func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+
+			content, err := fs.ReadFile(oc.config.ConfigFS, path)
+			if err != nil {
+				return fmt.Errorf("failed to read file %s: %w", path, err)
+			}
+
+			destPath := filepath.Join(oc.configDir, path)
+			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+				return fmt.Errorf("failed to create directory for %s: %w", destPath, err)
+			}
+
+			if err := os.WriteFile(destPath, content, 0644); err != nil {
+				return fmt.Errorf("failed to write file %s: %w", destPath, err)
+			}
+
+			return nil
+		}); err != nil {
+			return fmt.Errorf("failed to walk config fs: %w", err)
+		}
+	}
+
 	args := []string{"serve"}
 
 	hostname := "127.0.0.1"
 	args = append(args, "--hostname", hostname, "--port", fmt.Sprintf("%d", port))
 
-	cmd := exec.Command("opencode", args...)
+	oc.cmd = exec.Command("opencode", args...)
+	oc.cmd.Env = os.Environ()
 
-	// Set environment variables
-	cmd.Env = os.Environ()
-
-	configDir := oc.config.ConfigDir
-	if configDir == "" {
-		configDir = os.Getenv("OPENCODE_CONFIG_DIR")
+	if oc.configDir != "" {
+		configJSONPath := filepath.Join(oc.configDir, "config.json")
+		oc.cmd.Env = append(oc.cmd.Env,
+			fmt.Sprintf("OPENCODE_CONFIG=%s", configJSONPath),
+			fmt.Sprintf("OPENCODE_CONFIG_DIR=%s", oc.configDir),
+		)
+		slog.Info("Set config environment variables", "config", configJSONPath, "dir", oc.configDir)
 	}
 
-	if configDir != "" {
-		if oc.config.ConfigFS != nil {
-			// Copy config files from ConfigFS to configDir
-			if err := fs.WalkDir(oc.config.ConfigFS, ".", func(path string, d fs.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
-				if d.IsDir() {
-					return nil
-				}
-
-				data, err := fs.ReadFile(oc.config.ConfigFS, path)
-				if err != nil {
-					return err
-				}
-
-				destPath = filepath.Join(configDir, path)
-
-				if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-					return err
-				}
-				return os.WriteFile(destPath, data, 0644)
-			}); err != nil {
-				return fmt.Errorf("failed to copy config files: %w", err)
-			}
-			slog.Info("Copied config files to directory", "dir", configDir)
-		}
-
-		// Set the working directory for the opencode process
-		cmd.Dir = configDir
-
-		// Set HOME and XDG_CONFIG_HOME to isolate config completely
-		cmd.Env = append(cmd.Env, fmt.Sprintf("HOME=%s", configDir))
-		cmd.Env = append(cmd.Env, fmt.Sprintf("XDG_CONFIG_HOME=%s", configDir))
-		cmd.Env = append(cmd.Env, fmt.Sprintf("OPENCODE_CONFIG_DIR=%s", configDir))
-		slog.Info("Using isolated config directory", "dir", configDir)
-	} else {
-		slog.Info("Using system config directory")
+	if oc.config.CWD != "" {
+		oc.cmd.Dir = oc.config.CWD
+		slog.Info("Set working directory for opencode process", "cwd", oc.config.CWD)
 	}
-
-	if oc.config.APIKey != "" {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("OPENCODE_API_KEY=%s", oc.config.APIKey))
-		slog.Info("Set OPENCODE_API_KEY environment variable")
-	}
-
-	oc.cmd = cmd
 
 	// Redirect stderr to see error messages
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stdout
+	oc.cmd.Stderr = os.Stderr
+	oc.cmd.Stdout = os.Stdout
 
-	slog.Info("Starting opencode", "args", cmd.Args)
+	slog.Info("Starting opencode", "args", oc.cmd.Args)
 
 	if err := oc.cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start opencode: %w", err)
 	}
 	slog.Info("OpenCode process started", "pid", oc.cmd.Process.Pid)
 
-	go func() {
-		state, err := oc.cmd.Process.Wait()
-		if err != nil {
-			slog.Error("OpenCode process exited with error", "pid", oc.cmd.Process.Pid, "err", err, "state", state)
-		} else {
-			slog.Info("OpenCode process exited", "pid", oc.cmd.Process.Pid, "state", state)
-		}
-	}()
-
-	time.Sleep(500 * time.Millisecond)
-
-	process, err := os.FindProcess(oc.cmd.Process.Pid)
-	if err != nil {
-		return fmt.Errorf("opencode process exited immediately")
-	}
-
-	if err := process.Signal(syscall.Signal(0)); err != nil {
-		return fmt.Errorf("opencode process failed to start")
-	}
-
-	slog.Info("OpenCode process confirmed running", "pid", oc.cmd.Process.Pid)
 	return nil
 }
 
@@ -174,20 +156,64 @@ func (oc *OpenCode) Addr() string {
 	return oc.config.Addr
 }
 
-func (oc *OpenCode) WaitForReady(maxAttempts int) error {
-	slog.Info("Waiting for OpenCode to be ready", "addr", oc.config.Addr, "maxAttempts", maxAttempts)
-	client := &http.Client{Timeout: 2 * time.Second}
-	for i := 0; i < maxAttempts; i++ {
-		resp, err := client.Get(fmt.Sprintf("http://%s/global/health", oc.config.Addr))
-		if err == nil {
-			resp.Body.Close()
-			slog.Info("OpenCode is ready", "addr", oc.config.Addr, "attempt", i+1)
-			return nil
-		}
-		if i%10 == 0 {
-			slog.Debug("Waiting for OpenCode...", "attempt", i+1, "err", err)
-		}
-		time.Sleep(500 * time.Millisecond)
+func (oc *OpenCode) WaitForReady(ctx context.Context, maybeTimeout ...time.Duration) error {
+	timeout := 15 * time.Second
+	if len(maybeTimeout) > 0 {
+		timeout = maybeTimeout[0]
 	}
-	return fmt.Errorf("OpenCode not ready after %d attempts", maxAttempts)
+	var cancel context.CancelFunc
+	if len(maybeTimeout) > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+	} else {
+		cancel = func() {}
+	}
+	defer cancel()
+	slog.Info("Waiting for OpenCode to be ready", "addr", oc.config.Addr, "timeout", timeout)
+	readyChan := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for i := 0; ; i++ {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				req, _ := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://%s/global/health", oc.config.Addr), nil)
+				resp, err := http.DefaultClient.Do(req)
+				if err == nil {
+					resp.Body.Close()
+					slog.Info("OpenCode is ready", "addr", oc.config.Addr, "attempt", i+1)
+					readyChan <- struct{}{}
+					return
+				}
+				if i%10 == 0 {
+					slog.Debug("Waiting for OpenCode...", "attempt", i+1, "err", err)
+				}
+			}
+		}
+	}()
+	select {
+	case <-readyChan:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("opencode is not ready after %s", timeout)
+	}
+}
+
+func (oc *OpenCode) Cleanup() error {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+
+	if oc.configDir == "" {
+		return nil
+	}
+
+	slog.Info("Cleaning up config directory", "path", oc.configDir)
+	if err := os.RemoveAll(oc.configDir); err != nil {
+		return fmt.Errorf("failed to remove config directory: %w", err)
+	}
+
+	oc.configDir = ""
+	slog.Info("Config directory removed")
+	return nil
 }

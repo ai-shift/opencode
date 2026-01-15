@@ -8,13 +8,13 @@ import (
 
 func TestNew(t *testing.T) {
 	cfg := Config{
-		ConfigDir: "/test/config",
-		Addr:      "localhost:8080",
+		CWD:  "/test/config",
+		Addr: "localhost:8080",
 	}
 	oc := New(cfg)
 
 	assert.NotNil(t, oc)
-	assert.Equal(t, cfg.ConfigDir, oc.config.ConfigDir)
+	assert.Equal(t, cfg.CWD, oc.config.CWD)
 	assert.Equal(t, cfg.Addr, oc.config.Addr)
 	assert.NotNil(t, oc.client)
 	assert.Equal(t, cfg.Addr, oc.Addr())
@@ -41,7 +41,7 @@ func TestStartWhenAlreadyRunning(t *testing.T) {
 
 func TestStartAutoAllocatesPort(t *testing.T) {
 	cfg := Config{
-		ConfigDir: "/test/config",
+		CWD: "/test/config",
 	}
 	oc := New(cfg)
 	oc.cmd = nil
