@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"flag"
 	"fmt"
@@ -13,7 +14,7 @@ import (
 	"github.com/ai-shift/opencode"
 )
 
-//go:embed example_config
+//go:embed .opencode
 var configFS embed.FS
 
 func main() {
@@ -38,27 +39,29 @@ func main() {
 	}
 
 	// Create sub FS for config files
-	subFS, err := fs.Sub(configFS, "example_config")
+	subFS, err := fs.Sub(configFS, ".opencode")
 	if err != nil {
 		log.Fatalf("Failed to create sub FS: %v", err)
 	}
 
 	cfg := opencode.Config{
-		ConfigDir: sessionDir,
-		APIKey:    os.Getenv("OPENCODE_API_KEY"),
-		ConfigFS:  subFS,
+		CWD:      sessionDir,
+		ConfigFS: subFS,
 	}
 
 	oc := opencode.New(cfg)
 
 	fmt.Printf("Starting OpenCode server in directory: %s\n", sessionDir)
 
-	if err := oc.Start(); err != nil {
-		log.Fatalf("Failed to start opencode: %v", err)
-	}
+	go func() {
+		if err := oc.Start(); err != nil {
+			log.Fatalf("Failed to start opencode: %v", err)
+		}
+	}()
 	defer oc.Stop()
+	defer oc.Cleanup()
 
-	if err := oc.WaitForReady(240); err != nil {
+	if err := oc.WaitForReady(context.Background()); err != nil {
 		log.Fatalf("Failed to connect to opencode: %v", err)
 	}
 
