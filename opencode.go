@@ -81,12 +81,15 @@ func (oc *OpenCode) Start() error {
 				return fmt.Errorf("failed to read file %s: %w", path, err)
 			}
 
+			// Expand environment variables in the content
+			expandedContent := []byte(os.ExpandEnv(string(content)))
+
 			destPath := filepath.Join(oc.configDir, path)
 			if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 				return fmt.Errorf("failed to create directory for %s: %w", destPath, err)
 			}
 
-			if err := os.WriteFile(destPath, content, 0644); err != nil {
+			if err := os.WriteFile(destPath, expandedContent, 0644); err != nil {
 				return fmt.Errorf("failed to write file %s: %w", destPath, err)
 			}
 
