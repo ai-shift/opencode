@@ -1,4 +1,10 @@
 {
-  "$schema": "https://opencode.ai/config.json",
-  "model": "opencode/grok-code"
+  "model": "opencode/grok-code",
+  "provider": {
+    "opencode": {
+      "options": {
+        "apiKey": "{env:OPENCODE_API_KEY}"
+      }
+    }
+  }
 }
